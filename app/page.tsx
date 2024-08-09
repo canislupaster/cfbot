@@ -157,7 +157,7 @@ export default function App() {
         <Title order={1} >Need a hint?</Title>
       </Stack>
       <Text my="md" >
-        We take data from your Codeforces' problem metadata, statement and editorial and feed it into an LLM.
+        We feed data from your Codeforces' problem metadata, statement and editorial into a LLM.
       </Text>
       <form
         onSubmit={form.onSubmit(handleSubmit)}
