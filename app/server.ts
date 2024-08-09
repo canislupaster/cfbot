@@ -4,7 +4,7 @@ import { Cheerio } from "cheerio";
 import * as cheerio from "cheerio";
 import OpenAI from "openai";
 import { ProxyAgent } from "undici";
-import { APIError, AuthResult, HintType } from "./util";
+import { APIError, apiRes, AuthResult, HintType } from "./util";
 
 import prox from "../proxies.json";
 import { encoding_for_model } from "tiktoken";
@@ -172,9 +172,9 @@ async function getProblemSet() {
 
 const openai = new OpenAI();
 
-export async function getProblemNames() {
+export const getProblemNames = apiRes(async ()=>{
 	return (await getProblemSet()).problems.map(x=>`${x.contestId}${x.index}`);
-}
+});
 
 const MAX_OUT_TOKEN = 512;
 const MAX_IN_TOKEN = 8192;
@@ -182,7 +182,10 @@ const MODEL = "gpt-4o-mini";
 
 const enc = encoding_for_model("gpt-4o");
 
-export async function getHint(type: HintType, contest: string, index: string, prompt: string): Promise<Exclude<AuthResult, {type: "success"}>|{type: "success", result: string, tokens: number|null}> {
+export const getHint = apiRes(
+	async (type: HintType, contest: string, index: string, prompt: string):
+		Promise<Exclude<AuthResult, {type: "success"}>|{type: "success", result: string, tokens: number|null}> => {
+
 	const authRes = await auth();
 	if (authRes.type!="success") return authRes;
 
@@ -272,4 +275,4 @@ export async function getHint(type: HintType, contest: string, index: string, pr
 		result: type=="yesNo" ? words[0].toLowerCase() : out,
 		tokens: completion.usage?.total_tokens ?? null
 	};
-}
+});

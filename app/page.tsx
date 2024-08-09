@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { getHint, getProblemNames } from "./server";
 import { Container,Text,TextInput,Group,Autocomplete,Select, Button, Stack, Loader, Title, Box, ComboboxItem, Alert, Space, Center, Textarea, Modal, Anchor, Image } from "@mantine/core";
 import { useForm } from '@mantine/form';
-import { APIError, APIErrorType, AuthResult, HintType, Unauthorized } from "./util";
+import { APIError, APIErrorType, AuthResult, HintType, resApi, Unauthorized } from "./util";
 import { IconBrandDiscordFilled, IconExclamationCircleFilled, IconMessageChatbotFilled, IconRobot } from "@tabler/icons-react";
 import { exchangeCode, isLoggedIn, logout } from "./auth";
 import what from "./what.svg"
@@ -19,7 +19,8 @@ export default function App() {
     failed: "Failed to get completion",
     problemNotFound: "Problem not found",
     editorialNotFound: "Editorial not found",
-    refusal: "The model refused to answer"
+    refusal: "The model refused to answer",
+    other: "Internal server error"
   };
 
   const [res, setRes] = useState<
@@ -37,7 +38,7 @@ export default function App() {
 
   const [problemNames, setProblemNames] = useState<string[]>([]);
   useEffect(() => {
-    getProblemNames().then(x=>setProblemNames(x));
+    resApi(getProblemNames)().then(x=>setProblemNames(x));
   }, []);
 
   const form = useForm({
@@ -103,7 +104,7 @@ export default function App() {
 
   const handleSubmit = (values: typeof form.values)=>wrapPromise(async ()=>{
     const match = values.probName.match(/^(\d+)(\w+?)$/)!;
-    const res = await getHint(values.type, match[1], match[2], values.question);
+    const res = await resApi(getHint)(values.type, match[1], match[2], values.question);
     if (res.type!="success") {
       localStorage.setItem("req", JSON.stringify(values));
       setAuthErr(res);
@@ -126,10 +127,10 @@ export default function App() {
     const code=params.get("code"), state=params.get("state");
     //so i should probably make this only on post but nextjs makes everything hard D:
     if (code!=undefined && state!=undefined) {
-      setLoggedIn(await exchangeCode(code, state));
+      setLoggedIn(await resApi(exchangeCode)(code, state));
       window.history.replaceState(null, "", "?");
     } else {
-      setLoggedIn(await isLoggedIn());
+      setLoggedIn(await resApi(isLoggedIn)());
     }
 
     if (vs!=null) {
@@ -141,14 +142,18 @@ export default function App() {
   }), []);
 
   return (
-    <Container pt="lg" maw={700} >
-      <Modal centered opened={authErr!=null} onClose={()=>setAuthErr(null)} title={<Title order={2} >Unauthorized</Title>} withCloseButton >
+    <Container py="lg" maw={700} >
+      <Modal centered opened={authErr!=null}
+        onClose={()=>setAuthErr(null)}
+        title={<Title order={2} >Unauthorized</Title>} withCloseButton >
         <Text>{authErr?.type=="login" ? "You aren't logged in! You must be in the Discord to continue." : "You aren't in the Discord -- you can try logging in again."}</Text>
 
         <Center mt="lg" >
           <Button onClick={() => {
             if (authErr!=null) window.location.href=authErr?.redirect;
-          }} size="lg" leftSection={<IconBrandDiscordFilled/>} >Login with Discord</Button>
+          }} size="lg" ff="heading" leftSection={<IconBrandDiscordFilled/>} >
+            Login with Discord
+          </Button>
         </Center>
       </Modal>
 
@@ -193,7 +198,9 @@ export default function App() {
         />
 
         <Center>
-          <Button type="submit" mt="md" disabled={res?.type=="loading"} leftSection={<IconMessageChatbotFilled/>} size="xl" >Ask GPT-4o-Mini</Button>
+          <Button type="submit" mt="md" disabled={res?.type=="loading"} leftSection={<IconMessageChatbotFilled/>} size="xl" ff="heading" >
+            Ask GPT-4o-Mini
+          </Button>
         </Center>
 
       </Stack></form>
@@ -204,7 +211,7 @@ export default function App() {
 
       <Space h="lg" />
 
-      {loggedIn && <Anchor onClick={()=>wrapPromise(()=>logout().then(x=>{
+      {loggedIn && <Anchor onClick={()=>wrapPromise(()=>resApi(logout)().then(x=>{
         setLoggedIn(null);
         return null;
       }))} >

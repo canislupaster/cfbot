@@ -4,7 +4,7 @@ import { cookies } from 'next/headers'
 import {default as knexConstructor} from "knex"
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { fetchDispatcher } from "./server";
-import { AuthResult, ROOT_URL, Unauthorized } from "./util";
+import { apiRes, AuthResult, ROOT_URL, Unauthorized } from "./util";
 
 const knex = knexConstructor({
 	client: "better-sqlite3",
@@ -87,7 +87,7 @@ export async function auth(): Promise<AuthResult> {
 	return {type: "success"};
 }
 
-export async function exchangeCode(code: string, state: string) {
+export const exchangeCode = apiRes(async (code: string, state: string) => {
 	const ses = await session();
 	if (state!==ses.id) throw new Unauthorized("Bad state");
 
@@ -129,15 +129,15 @@ export async function exchangeCode(code: string, state: string) {
 	});
 
 	return user.username;
-}
+});
 
-export async function isLoggedIn() {
+export const isLoggedIn = apiRes(async ()=>{
 	const ses = await session();
 	if (ses.user!=null) return (await getUser(ses.user))?.discordUsername ?? null;
 	return null;
-}
+});
 
-export async function logout() {
+export const logout = apiRes(async ()=>{
 	const ses = await session();
 	await knex<DBSession>("session").where({id: ses.id}).delete();
-}
+});
