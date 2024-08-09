@@ -43,10 +43,11 @@ export default function App() {
 
   const form = useForm({
     mode: "uncontrolled",
-    initialValues: { probName: "", question: "", type: "yesNo" as HintType },
+    initialValues: { probName: "", question: "", type: "yesNo" as HintType|null },
     validate: {
       probName: (x)=>(/^\d+\w+$/.test(x) ? null : "Problems should be composed of a contest id and a problem index"),
       question: (x)=>x.trim().length>0 ? null : "Your question is empty!",
+      type: (x)=>x!=null ? null : "Choose a hint type!"
     }
   });
 
@@ -104,14 +105,14 @@ export default function App() {
 
   const handleSubmit = (values: typeof form.values)=>wrapPromise(async ()=>{
     const match = values.probName.match(/^(\d+)(\w+?)$/)!;
-    const res = await resApi(getHint)(values.type, match[1], match[2], values.question);
+    const res = await resApi(getHint)(values.type!, match[1], match[2], values.question);
     if (res.type!="success") {
       localStorage.setItem("req", JSON.stringify(values));
       setAuthErr(res);
       return null;
     }
 
-    return { ...res, type: "ok", hint: values.type };
+    return { ...res, type: "ok", hint: values.type! };
   });
 
   useEffect(() => wrapPromise(async ()=>{
