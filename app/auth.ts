@@ -62,9 +62,7 @@ async function inDiscord(discordId: string) {
 		else throw r.statusText;
 	},
 	`https://discord.com/api/guilds/${DISCORD_GUILD}/members/${discordId}`, {
-		headers: {
-			Authorization: `Bot ${DISCORD_TOKEN}`
-		}
+		headers: { Authorization: `Bot ${DISCORD_TOKEN}` }
 	});
 }
 
@@ -83,7 +81,8 @@ export async function auth(): Promise<AuthResult> {
 
 	const did = ses.user==null ? null : (await getUser(ses.user))?.discordId;
 	if (ses.user==null || did==null) return {type: "login", redirect: redir.href};
-	if (!inDiscord(did)) return {type: "notInDiscord", redirect: redir.href};
+	if (!(await inDiscord(did)))
+		return {type: "notInDiscord", redirect: redir.href};
 
 	return {type: "success"};
 }

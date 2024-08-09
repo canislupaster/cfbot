@@ -10,7 +10,7 @@ const redhat = Red_Hat_Mono({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "CFBot",
-  description: "um chatgpt on CF editorials"
+  description: "sneak a hint from CF editorials with mr LLM!"
 };
 
 const theme = createTheme({
