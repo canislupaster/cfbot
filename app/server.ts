@@ -193,11 +193,17 @@ export async function getHint(type: HintType, contest: string, index: string, pr
 
 	const edit = await getEditorial(prob.contestId.toString(), prob.index);
 
-	let hintStr: string;
+	let hintStr: string, hintDesc:string|null=null;
 	switch (type) {
-		case "big": hintStr="big"; break;
-		case "medium": hintStr="medium"; break;
-		case "small": hintStr="small"; break;
+		case "big": hintStr="big"; hintDesc="Give specifics and reveal major insights."; break;
+		case "medium":
+			hintStr="medium";
+			hintDesc="Help the user overcome their roadblock, but reveal as little as possible.";
+			break;
+		case "small":
+			hintStr="small";
+			hintDesc="Give a subtle push in the right direction, without any specifics. Make a suggestion, but do not directly reveal any steps, insights, or ideas in the solution."
+			break;
 		case "oneWord": hintStr="one word"; break;
 		case "yesNo": hintStr="yes or no"; break;
 		default: throw new APIError("failed", `unknown hint type ${type}`);
@@ -205,7 +211,7 @@ export async function getHint(type: HintType, contest: string, index: string, pr
 
 	const key = `${type}Hint`;
 
-	const system = `You will provide ${hintStr} hints to a Codeforces problem given the content of the editorial (including hints, solutions, and code). In this case, the problem is ${prob.contestId}${prob.index} - ${prob.name}.${prob.tags.length>0 ? ` It is tagged ${
+	const system = `You will provide a **${hintStr}** hint to a Codeforces problem given the content of the editorial (including hints, solutions, and code).${hintDesc==null ? "" : ` ${hintDesc}`} In this case, the problem is ${prob.contestId}${prob.index} - ${prob.name}.${prob.tags.length>0 ? ` It is tagged ${
 		prob.tags.join(", ")}.`:""
 	}${
 		edit.statement!=null ? `\nProblem statement:\n${edit.statement}` : ""

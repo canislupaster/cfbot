@@ -2,11 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getHint, getProblemNames } from "./server";
-import { Container,Text,TextInput,Group,Autocomplete,Select, Button, Stack, Loader, Title, Box, ComboboxItem, Alert, Space, Center, Textarea, Modal, Anchor } from "@mantine/core";
+import { Container,Text,TextInput,Group,Autocomplete,Select, Button, Stack, Loader, Title, Box, ComboboxItem, Alert, Space, Center, Textarea, Modal, Anchor, Image } from "@mantine/core";
 import { useForm } from '@mantine/form';
 import { APIError, APIErrorType, AuthResult, HintType, Unauthorized } from "./util";
-import { IconExclamationCircleFilled, IconHelpCircleFilled, IconMessageChatbotFilled } from "@tabler/icons-react";
+import { IconBrandDiscordFilled, IconExclamationCircleFilled, IconMessageChatbotFilled, IconRobot } from "@tabler/icons-react";
 import { exchangeCode, isLoggedIn, logout } from "./auth";
+import what from "./what.svg"
+import NextImage from "next/image"
 
 export default function App() {
   const typeNames: Record<HintType, string> = {
@@ -17,7 +19,7 @@ export default function App() {
     failed: "Failed to get completion",
     problemNotFound: "Problem not found",
     editorialNotFound: "Editorial not found",
-    refusal: "ChatGPT refused to answer"
+    refusal: "The model refused to answer"
   };
 
   const [res, setRes] = useState<
@@ -25,7 +27,7 @@ export default function App() {
     | {type: "error", err: string}
     | {type: "unauthorized", err: string}
     | {type: "apiError", err: APIError}
-    | ({type: "ok", result: string, tokens: number|null})
+    | ({type: "ok", result: string, tokens: number|null, hint: HintType})
     | {type: "loading"}>();
   
   const [authErr, setAuthErr] = useState<Exclude<AuthResult,{type: "success"}>|null>(null);
@@ -54,13 +56,11 @@ export default function App() {
       break;
 
     case "ok":
-      x=<Alert variant="outline" title="ChatGPT's response" >
-        <Group>
-          <IconMessageChatbotFilled/>
-          <Text size="lg" ff="monospace" >
-            {res.result}
-          </Text>
-        </Group>
+      x=<Alert variant="outline" title={<Title order={4} >{typeNames[res.hint]} Hint</Title>} >
+        <Text size="lg" ff="monospace" mx={10} >
+          <IconMessageChatbotFilled style={{verticalAlign: "sub", marginRight: "0.5rem"}} />
+          {res.result}
+        </Text>
         {res.tokens && <Text c="dimmed" size="sm" mt="md" >
           {res.tokens} tokens used
         </Text>}
@@ -110,7 +110,7 @@ export default function App() {
       return null;
     }
 
-    return { ...res, type: "ok" };
+    return { ...res, type: "ok", hint: values.type };
   });
 
   useEffect(() => wrapPromise(async ()=>{
@@ -141,20 +141,23 @@ export default function App() {
   }), []);
 
   return (
-    <Container pt="lg" >
+    <Container pt="lg" maw={700} >
       <Modal centered opened={authErr!=null} onClose={()=>setAuthErr(null)} title={<Title order={2} >Unauthorized</Title>} withCloseButton >
         <Text>{authErr?.type=="login" ? "You aren't logged in! You must be in the Discord to continue." : "You aren't in the Discord -- you can try logging in again."}</Text>
 
         <Center mt="lg" >
           <Button onClick={() => {
             if (authErr!=null) window.location.href=authErr?.redirect;
-          }} size="lg" >Login with Discord</Button>
+          }} size="lg" leftSection={<IconBrandDiscordFilled/>} >Login with Discord</Button>
         </Center>
       </Modal>
 
-      <Title order={2} my="lg" >Ask about a Codeforces problem</Title>
+			<Stack align="center" my="lg" >
+        <Image component={NextImage} src={what} alt="icon" w={120} />
+        <Title order={1} >Need a hint?</Title>
+      </Stack>
       <Text my="md" >
-        We take data from problem metadata, statement and editorial and feed it into ChatGPT.
+        We take data from your Codeforces' problem metadata, statement and editorial and feed it into an LLM.
       </Text>
       <form
         onSubmit={form.onSubmit(handleSubmit)}
@@ -184,12 +187,13 @@ export default function App() {
           label="Question"
           placeholder="Is it FFT?"
           className="w-full"
+          autosize minRows={2} maxRows={8}
           key={form.key("question")}
           {...form.getInputProps("question")}
         />
 
         <Center>
-          <Button type="submit" mt="md" disabled={res?.type=="loading"} rightSection={<IconHelpCircleFilled/>} size="xl" >Ask ChatGPT</Button>
+          <Button type="submit" mt="md" disabled={res?.type=="loading"} leftSection={<IconMessageChatbotFilled/>} size="xl" >Ask GPT-4o-Mini</Button>
         </Center>
 
       </Stack></form>
