@@ -74,7 +74,7 @@ export default function RootLayout({ children }: Readonly<{
         <link rel="icon" href={icon.src} />
       </head>
       <body>
-        <MantineProvider defaultColorScheme="dark" theme={theme} >
+        <MantineProvider forceColorScheme="dark" theme={theme} >
           {children}
         </MantineProvider>
       </body>
