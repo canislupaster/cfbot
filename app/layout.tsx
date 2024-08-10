@@ -1,4 +1,6 @@
 import '@mantine/core/styles.css';
+import '@mantine/code-highlight/styles.css';
+
 import { ColorSchemeScript, createTheme, MantineProvider } from '@mantine/core';
 
 import type { Metadata } from "next";
@@ -14,10 +16,8 @@ export const metadata: Metadata = {
 };
 
 const theme = createTheme({
-  black: "#f8f7f5",
-  white: "#21201f",
-  autoContrast: true,
-  luminanceThreshold: 0.1,
+  white: "#f8f7f5",
+  black: "#21201f",
   primaryColor: "blue",
   colors: {
     gray: [
@@ -31,19 +31,31 @@ const theme = createTheme({
       "#594a40",
       "#3b312b",
       "#1e1915"
-    ].reverse() as any,
+    ],
+    dark: [
+      "#f8f7f5", //0
+      "#b5b0a5", //1
+      "#9c8a7e", //2
+      "#948378", //3
+      "#947b6b", //4
+      "#1e1915", //5
+      "#2e2b28", //6
+      "#21201f", //7
+      "#1a1817", //8
+      "#0d0c0c", //9
+    ],
     blue: [
-      "#fcebe9",
-      "#f9d7d2",
-      "#f3aea5",
-      "#ed8678",
-      "#e75e4b",
-      "#e0351f",
-      "#b42b18",
-      "#872012",
       "#5a150c",
-      "#2d0b06"
-    ]
+      "#7e1e11",
+      "#a22616",
+      "#c52f1b",
+      "#e23d28",
+      "#e75e4b",
+      "#eb7e6f",
+      "#f09e93",
+      "#f5beb7",
+      "#fadfdb"
+    ].reverse() as any
   },
   fontFamily: redhat.style.fontFamily,
   headings: {
@@ -62,7 +74,7 @@ export default function RootLayout({ children }: Readonly<{
         <link rel="icon" href={icon.src} />
       </head>
       <body>
-        <MantineProvider theme={theme} >
+        <MantineProvider defaultColorScheme="dark" theme={theme} >
           {children}
         </MantineProvider>
       </body>

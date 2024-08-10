@@ -4,7 +4,7 @@ import { cookies } from 'next/headers'
 import {default as knexConstructor} from "knex"
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { fetchDispatcher } from "./server";
-import { apiRes, AuthResult, ROOT_URL, Unauthorized } from "./util";
+import { apiRes, AuthFailure, ROOT_URL, Unauthorized } from "./util";
 
 const knex = knexConstructor({
 	client: "better-sqlite3",
@@ -13,9 +13,9 @@ const knex = knexConstructor({
 });
 
 type DBSession = {id: string, key: Buffer, user: number|null, created: number};
-type DBUser = {id: number, discordId: string, discordUsername: string};
+type DBUser = {id: number, discordId: string, discordUsername: string, cost: number};
 
-const SESSION_EXPIRE = 3600*24*10; //seconds
+const SESSION_EXPIRE = 1000*3600*24*10; //milliseconds
 
 function hash(s: string): Buffer {
 	const h = createHash("sha256");
@@ -27,10 +27,11 @@ async function session() {
 	const jar = cookies();
 	const ses=jar.get("session"), key=jar.get("key");
 	if (ses!=undefined && key!=undefined) {
-		const sesData = await knex<DBSession>("session").select()
-			.where({id: ses.value}).first();
-		if (sesData!=undefined && hash(key.value).equals(sesData.key)
-			&& Date.now()-sesData.created<SESSION_EXPIRE) {
+		const sesData = (await knex<DBSession>("session").update({created: Date.now()})
+			.where({id: ses.value}).andWhereRaw("created >= ?", [Date.now()-SESSION_EXPIRE])
+			.returning(["key", "id", "user"]))[0];
+
+		if (sesData!=undefined && hash(key.value).equals(sesData.key)) {
 			return {id: sesData.id, user: sesData.user??null};
 		}
 	}
@@ -56,7 +57,7 @@ const DISCORD_TOKEN = process.env["DISCORD_TOKEN"]!;
 const DISCORD_GUILD = process.env["DISCORD_GUILD"]!;
 
 async function inDiscord(discordId: string) {
-	return await fetchDispatcher(async r=>{
+	return await fetchDispatcher(true, async r=>{
 		if (r.status==404) return false;
 		else if (r.status==200) return true;
 		else throw r.statusText;
@@ -66,7 +67,7 @@ async function inDiscord(discordId: string) {
 	});
 }
 
-export async function auth(): Promise<AuthResult> {
+export async function auth(): Promise<AuthFailure|{type: "success", user: DBUser}> {
 	const ses = await session();
 	const redir = new URL("https://discord.com/oauth2/authorize");
 	const params: Record<string,string> = {
@@ -79,19 +80,19 @@ export async function auth(): Promise<AuthResult> {
 	
 	redir.search = new URLSearchParams(params).toString();
 
-	const did = ses.user==null ? null : (await getUser(ses.user))?.discordId;
-	if (ses.user==null || did==null) return {type: "login", redirect: redir.href};
-	if (!(await inDiscord(did)))
+	const u = ses.user==null ? null : await getUser(ses.user);
+	if (ses.user==null || u==null) return {type: "login", redirect: redir.href};
+	if (!(await inDiscord(u.discordId)))
 		return {type: "notInDiscord", redirect: redir.href};
 
-	return {type: "success"};
+	return {type: "success", user: u};
 }
 
 export const exchangeCode = apiRes(async (code: string, state: string) => {
 	const ses = await session();
 	if (state!==ses.id) throw new Unauthorized("Bad state");
 
-	const token = await fetchDispatcher(r=>r.json(), "https://discord.com/api/oauth2/token", {
+	const token = await fetchDispatcher(true, r=>r.json(), "https://discord.com/api/oauth2/token", {
 		method: "POST",
 		body: new URLSearchParams({
 			client_id: DISCORD_CLIENT,
@@ -109,7 +110,7 @@ export const exchangeCode = apiRes(async (code: string, state: string) => {
 	if (typeof token.access_token !== "string")
 		throw new Unauthorized("Failed to retrieve access token.");
 
-	const user = await fetchDispatcher(r=>r.json(), 'https://discord.com/api/users/@me', {
+	const user = await fetchDispatcher(true, r=>r.json(), 'https://discord.com/api/users/@me', {
 		headers: { authorization: `Bearer ${token.access_token}` },
 	});
 
@@ -141,3 +142,7 @@ export const logout = apiRes(async ()=>{
 	const ses = await session();
 	await knex<DBSession>("session").where({id: ses.id}).delete();
 });
+
+export async function addCost(u: DBUser, cost: number) {
+	await knex<DBUser>("user").update({cost: u.cost+cost}).where({id: u.id});
+}

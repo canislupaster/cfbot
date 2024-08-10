@@ -4,14 +4,15 @@ import { Cheerio } from "cheerio";
 import * as cheerio from "cheerio";
 import OpenAI from "openai";
 import { ProxyAgent } from "undici";
-import { APIError, apiRes, AuthResult, HintType } from "./util";
+import { APIError, apiRes, AuthFailure, HintResult, HintType } from "./util";
 
 import prox from "../proxies.json";
 import { encoding_for_model } from "tiktoken";
-import { auth } from "./auth";
+import { addCost, auth } from "./auth";
 
-let dispatchers: (ProxyAgent|undefined)[] = [undefined];
-let waiters: (()=>void)[] = [];
+const dispatchers: (ProxyAgent|undefined)[] = [];
+const waiters: (()=>void)[] = [];
+const mainWaiters: (()=>void)[] = [];
 
 function shuffle<T>(arr: T[]) {
 	for (let i=1; i<arr.length; i++) {
@@ -22,7 +23,7 @@ function shuffle<T>(arr: T[]) {
 	}
 }
 
-console.log(`adding ${prox.length} proxies`);
+console.log(`initializing ${prox.length} proxies`);
 
 for (const p of (prox as string[])) {
 	const parts = p.split(":");
@@ -35,28 +36,45 @@ for (const p of (prox as string[])) {
 }
 
 shuffle(dispatchers);
+let mainReady=true;
 
-const dispatcherWait = 500, dispatcherErrorWait = 30_000;
+const dispatcherWait = 500, dispatcherErrorWait = 30_000, timeout=10_000;
+const waiterLimit = 25;
 
-export async function fetchDispatcher<T>(transform: (r: Response) => Promise<T>, ...args: Parameters<typeof fetch>): Promise<T> {
+export async function fetchDispatcher<T>(noproxy: boolean, transform: (r: Response) => Promise<T>, ...args: Parameters<typeof fetch>): Promise<T> {
 	let err: any;
 	for (let retryI=0; retryI<5; retryI++) {
-		while (dispatchers.length==0) {
-			await new Promise<void>((res,rej) => waiters.push(res));
+		let d: ProxyAgent|undefined=undefined;
+
+		if ((noproxy && mainWaiters.length>=waiterLimit) || (!noproxy && waiters.length>=waiterLimit))
+			throw new APIError("failed", "We're too far backed up right now! Come back later.");
+
+		if (noproxy) {
+			while (!mainReady)
+				await new Promise<void>((res,rej) => mainWaiters.push(res));
+		} else {
+			while (dispatchers.length==0 && !mainReady) {
+				await new Promise<void>((res,rej) => waiters.push(res));
+			}
+
+			if (dispatchers.length>0) d=dispatchers.pop();
 		}
 
-		const d = dispatchers.pop();
+		if (d===undefined) mainReady=false;
+
 		let wait = dispatcherWait;
 
 		try {
 			const hdrs = new Headers({...args[1]?.headers});
 			// hdrs.append("User-Agent", userAgent);
 
+			console.log("fetching", args[0]);
 			const resp = await fetch(args[0], {
 				...args[1],
 				//@ts-ignore
 				dispatcher: d,
-				headers: hdrs
+				headers: hdrs,
+				signal: AbortSignal.timeout(timeout)
 			});
 
 			if (resp.status==429 && resp.headers.has("Retry-After")) {
@@ -72,9 +90,15 @@ export async function fetchDispatcher<T>(transform: (r: Response) => Promise<T>,
 			continue;
 		} finally {
 			setTimeout(() => {
-				dispatchers.push(d);
-				const w = waiters.shift();
-				if (w!==undefined) w();
+				if (d===undefined) mainReady=true;
+				else dispatchers.push(d);
+
+				const mw = mainWaiters.shift();
+				if (mw!==undefined) mw();
+				else {
+					const w = waiters.shift();
+					if (w!==undefined) w();
+				}
 			}, wait);
 		}
 	}
@@ -87,7 +111,7 @@ async function getHTML(url: string|URL, qparams: Record<string,string>={}) {
 	const u = new URL(url);
 	for (const [k,v] of Object.entries(qparams))
 		u.searchParams.append(k,v);
-	return await fetchDispatcher((resp)=>{
+	return await fetchDispatcher(false,(resp)=>{
 		if (resp.status!=200) throw resp.statusText;
 		return resp.text().then(x=>cheerio.load(x));
 	}, u);
@@ -100,7 +124,10 @@ async function getEditorial(contest: string, index: string) {
 
 	const prob = await getHTML(`https://codeforces.com/problemset/problem/${contest}/${index}`);
 
-	const probStatement = prob(".problem-statement > div:not(.header,.input-specification,.output-specification,.sample-tests,.note)").html()
+	const probStatementEl = prob(".problem-statement > div:not(.header,.input-specification,.output-specification,.sample-tests,.note)");
+	//strip attributes
+	probStatementEl.find("*").each((i,el)=>{el.attribs={};});
+	const probStatement=probStatementEl.children().html();
 	
 	let out:string|null=null;
 	for (const box of prob(".roundbox.sidebox").toArray()) {
@@ -132,6 +159,7 @@ async function getEditorial(contest: string, index: string) {
 			if (href[1]==contest && href[2]==index) inprob=true;
 			else inprob=false;
 		} else if (inprob) {
+			edit(el).add(edit(el).find("*")).each((i,el)=>{el.attribs={};});
 			const content = edit(el).html();
 			if (content!=null && content.length>0)
 				txt.push(content);
@@ -161,11 +189,12 @@ type ProblemSet = {
 let problemSet: ProblemSet|null=null;
 
 async function getProblemSet() {
-	if (problemSet==null) problemSet=await fetchDispatcher(async (r)=>{
+	if (problemSet==null) problemSet=await fetchDispatcher(false, async (r)=>{
 		const j = await r.json();
 		if (j.status != "OK") throw new APIError("failed", `CF API Error: ${j.comment}`);
 		return j.result;
 	}, "https://codeforces.com/api/problemset.problems") as ProblemSet;
+
 
 	return problemSet;
 }
@@ -179,12 +208,13 @@ export const getProblemNames = apiRes(async ()=>{
 const MAX_OUT_TOKEN = 512;
 const MAX_IN_TOKEN = 8192;
 const MODEL = "gpt-4o-mini";
+const TOKEN_INPUT_CENTS = 15/1e6, TOKEN_OUTPUT_CENTS=60/1e6;
 
 const enc = encoding_for_model("gpt-4o");
 
 export const getHint = apiRes(
 	async (type: HintType, contest: string, index: string, prompt: string):
-		Promise<Exclude<AuthResult, {type: "success"}>|{type: "success", result: string, tokens: number|null}> => {
+		Promise<AuthFailure|({type: "success"}&HintResult)> => {
 
 	const authRes = await auth();
 	if (authRes.type!="success") return authRes;
@@ -196,16 +226,17 @@ export const getHint = apiRes(
 
 	const edit = await getEditorial(prob.contestId.toString(), prob.index);
 
+	const hasPrompt = prompt.trim().length>0;
 	let hintStr: string, hintDesc:string|null=null;
 	switch (type) {
-		case "big": hintStr="big"; hintDesc="Give specifics and reveal major insights."; break;
+		case "big": hintStr="big"; hintDesc=`Give specifics and reveal major insights.${hasPrompt ? " Fully address the user's question." : ""}`; break;
 		case "medium":
 			hintStr="medium";
-			hintDesc="Help the user overcome their roadblock, but reveal as little as possible.";
+			hintDesc="Help the user overcome a small roadblock, but reveal as little as possible.";
 			break;
 		case "small":
 			hintStr="small";
-			hintDesc="Give a subtle push in the right direction, without any specifics. Make a suggestion, but do not directly reveal any steps, insights, or ideas in the solution."
+			hintDesc=`Give a subtle push in the right direction, without any specifics. ${hasPrompt ? "Answer the question" : "Make a suggestion"}, but do not directly reveal any steps, insights, or ideas in the solution.`
 			break;
 		case "oneWord": hintStr="one word"; break;
 		case "yesNo": hintStr="yes or no"; break;
@@ -214,38 +245,84 @@ export const getHint = apiRes(
 
 	const key = `${type}Hint`;
 
-	const system = `You will provide a **${hintStr}** hint to a Codeforces problem given the content of the editorial (including hints, solutions, and code).${hintDesc==null ? "" : ` ${hintDesc}`} In this case, the problem is ${prob.contestId}${prob.index} - ${prob.name}.${prob.tags.length>0 ? ` It is tagged ${
+	const system = `You will provide a **${hintStr}** hint to a Codeforces problem given the content of the editorial (including hints, solutions, and code).${hintDesc==null ? "" : ` ${hintDesc}`} The problem is ${prob.contestId}${prob.index} - ${prob.name}.${prob.tags.length>0 ? ` It is tagged ${
 		prob.tags.join(", ")}.`:""
-	}${
-		edit.statement!=null ? `\nProblem statement:\n${edit.statement}` : ""
-	}\nEditorial content:\n${edit.editorial}`;
+	}${prob.rating!=null ? ` It is rated ${prob.rating}.` : ""}`;
 
 	const inputTokens=enc.encode_ordinary(`${prompt}\n${edit}`).length;
 	if (inputTokens>MAX_IN_TOKEN)
 		throw new APIError("failed", `Exceeded ${MAX_IN_TOKEN} input tokens`);
-		
-	const completion = await openai.chat.completions.create({
-		max_tokens: MAX_OUT_TOKEN,
-		messages: [{
-			role: "system",
-			content: system
-		}, {
+	const msgs: OpenAI.ChatCompletionMessageParam[] = [{ role: "system", content: system }];
+	
+	if (edit.statement!=null) {
+		msgs.push({
+			role: "assistant",
+			content: "What is the problem statement?"
+		});
+
+		msgs.push({
+			role: "user",
+			content: edit.statement
+		});
+	}
+
+	msgs.push({
+		role: "assistant",
+		content: "What is the editorial solution?"
+	});
+
+	msgs.push({
+		role: "user",
+		content: edit.editorial
+	});
+
+	if (hasPrompt) {
+		msgs.push({
+			role: "assistant",
+			content: "What is your question about the problem/solution?"
+		});
+
+		msgs.push({
 			role: "user",
 			content: prompt
-		}],
+		});
+	}
+
+	const noCode = ["yesNo","small","oneWord"].includes(type);
+	const completion = await openai.chat.completions.create({
+		max_tokens: MAX_OUT_TOKEN,
+		messages: msgs,
 		model: MODEL,
 		response_format: {
 			type: "json_schema",
 			json_schema: {
 				name: "hint_reasoning",
-				description: `Enter your hint here. Use explanation to decide what to reveal in your hint and ensure the accuracy of your hint, then enter your ${hintStr} hint in ${key}.`,
 				schema: {
 					type: "object",
 					properties: {
-						explanation: {type: "string"},
-						[key]: {type: "string"}
+						explanation: {
+							type: "string",
+							description: "Explain what you think you should reveal in your hint and verify the accuracy of your hint."
+						},
+						[key]: {
+							type: "string",
+							description: `Enter your ${hintStr} hint here. Keep it plain, with the exception of ${"`"}inline code blocks${"`"}.`
+						},
+						code: noCode ? undefined : {
+							type: ["object","null"],
+							properties: {
+								source: {type: "string"},
+								language: {
+									type: "string",
+									description: "Short language identifier (e.g. cpp, python, js)"
+								}
+							},
+							required: ["source", "language"],
+							additionalProperties: false,
+							description: `You may include code with your ${hintStr} hint here at your discretion. Do not include code if it's not requested by the user.`
+						}
 					},
-					required: ["explanation",key],
+					required: ["explanation",key,...(noCode ? [] : ["code"])],
 					additionalProperties: false
 				},
 				strict: true
@@ -257,22 +334,30 @@ export const getHint = apiRes(
 	if (msg?.refusal!=null) throw new APIError("refusal", msg.refusal);
 	if (msg?.content==null) throw new APIError("failed", "no content");
 
-	let out = JSON.parse(msg.content)[key];
-	if (typeof out !== "string") throw new APIError("failed", "invalid json from model response");
+	let out = JSON.parse(msg.content);
+	if (typeof out[key] !== "string") throw new APIError("failed", "invalid json from model response");
 
-	out=out.trim();
+	out[key]=out[key].trim();
 	if (out.length==0)
 		throw new APIError("refusal", "Model did not provide a nonempty response");
 
-	const words = out.split(/\s+/g);
+	const words = out[key].split(/\s+/g);
 	if ((type=="oneWord" || type=="yesNo") && words.length!=1)
 		throw new APIError("refusal", "Model did not provide a one-word response");
 	if (type=="yesNo" && !["yes","no"].includes(words[0].toLowerCase()))
 		throw new APIError("refusal", "Model did not provide a yes/no response");
 	
+	const u = completion.usage;
+	const cost = u==null ? 0 : TOKEN_INPUT_CENTS*u.prompt_tokens + TOKEN_OUTPUT_CENTS*u.completion_tokens;
+	if (cost>0) addCost(authRes.user, cost);
+
 	return {
 		type: "success",
-		result: type=="yesNo" ? words[0].toLowerCase() : out,
-		tokens: completion.usage?.total_tokens ?? null
+		result: type=="yesNo" ? words[0].toLowerCase() : out[key],
+		code: noCode ? null : (out.code ?? null),
+		usage: u==null ? null : {
+			tokens: u.total_tokens,
+			cents: cost
+		}
 	};
 });

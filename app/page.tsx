@@ -2,13 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getHint, getProblemNames } from "./server";
-import { Container,Text,TextInput,Group,Autocomplete,Select, Button, Stack, Loader, Title, Box, ComboboxItem, Alert, Space, Center, Textarea, Modal, Anchor, Image } from "@mantine/core";
+import { Container,Text,TextInput,Group,Autocomplete,Select, Button, Stack, Loader, Title, Box, ComboboxItem, Alert, Space, Center, Textarea, Modal, Anchor, Image, Code } from "@mantine/core";
 import { useForm } from '@mantine/form';
-import { APIError, APIErrorType, AuthResult, HintType, resApi, Unauthorized } from "./util";
+import { APIError, APIErrorType, AuthFailure, HintResult, HintType, resApi, Unauthorized } from "./util";
 import { IconBrandDiscordFilled, IconExclamationCircleFilled, IconMessageChatbotFilled, IconRobot } from "@tabler/icons-react";
 import { exchangeCode, isLoggedIn, logout } from "./auth";
 import what from "./what.svg"
 import NextImage from "next/image"
+import { CodeHighlight } from "@mantine/code-highlight";
+import React from "react";
 
 export default function App() {
   const typeNames: Record<HintType, string> = {
@@ -23,15 +25,17 @@ export default function App() {
     other: "Internal server error"
   };
 
+  type Task = "login"|"completion"|"logout";
+
   const [res, setRes] = useState<
     null
     | {type: "error", err: string}
     | {type: "unauthorized", err: string}
     | {type: "apiError", err: APIError}
-    | ({type: "ok", result: string, tokens: number|null, hint: HintType})
-    | {type: "loading"}>();
+    | ({type: "ok", hint: HintType}&HintResult)
+    | {type: "loading", kind: Task}>();
   
-  const [authErr, setAuthErr] = useState<Exclude<AuthResult,{type: "success"}>|null>(null);
+  const [authErr, setAuthErr] = useState<Exclude<AuthFailure,{type: "success"}>|null>(null);
   const [loggedIn, setLoggedIn] = useState<string|null>(null);
 
   const askI = useRef(0);
@@ -46,7 +50,6 @@ export default function App() {
     initialValues: { probName: "", question: "", type: "yesNo" as HintType|null },
     validate: {
       probName: (x)=>(/^\d+\w+$/.test(x) ? null : "Problems should be composed of a contest id and a problem index"),
-      question: (x)=>x.trim().length>0 ? null : "Your question is empty!",
       type: (x)=>x!=null ? null : "Choose a hint type!"
     }
   });
@@ -54,17 +57,40 @@ export default function App() {
   let x:React.ReactNode|null=null;
   switch (res?.type) {
     case "loading":
-      x=<Center><Loader type="dots" /></Center>;
+      x=<Center>
+        <Stack align="center" >
+          <Loader type="dots" />
+          <Text>
+            {{
+              completion: "This might take a minute to scrape data, etc...",
+              login: "Logging in...",
+              logout: "Logging out..."
+            }[res.kind]}
+          </Text>
+        </Stack>
+      </Center>;
       break;
 
     case "ok":
-      x=<Alert variant="outline" title={<Title order={4} >{typeNames[res.hint]} Hint</Title>} >
+      x=<Alert variant="outline" title={<Title order={4} >{typeNames[res.hint]} Hint</Title>} styles={{
+        body: {maxWidth: "100%"}
+      }} >
         <Text size="lg" ff="monospace" mx={10} >
           <IconMessageChatbotFilled style={{verticalAlign: "sub", marginRight: "0.5rem"}} />
-          {res.result}
+
+          {res.result.split(/(?<!\\)`/g).map((x,i)=>{
+            x=x.replaceAll("\\`", "`");
+            if (i%2==1) return <Code key={i} fz="lg" fw={900} >{x}</Code>;
+            else return <React.Fragment key={i} >{x}</React.Fragment>
+          })}
         </Text>
-        {res.tokens && <Text c="dimmed" size="sm" mt="md" >
-          {res.tokens} tokens used
+
+        {res.code!=null && 
+          <CodeHighlight code={res.code.source} mt="md" language={res.code.language} />
+        }
+
+        {res.usage && <Text c="dimmed" size="sm" mt="md" >
+          {res.usage.tokens} tokens used ({res.usage.cents.toPrecision(3)} ¢ of my money!)
         </Text>}
       </Alert>;
       break;
@@ -87,10 +113,10 @@ export default function App() {
     case null: break;
   }
 
-  const wrapPromise = (f: ()=>Promise<typeof res>) => {
+  const wrapPromise = (kind: Task, f: ()=>Promise<typeof res>) => {
     const old = ++askI.current;
-    const ores=res;
-    setRes({type: "loading"});
+    setRes({type: "loading", kind});
+    console.log("loading ", askI.current, kind);
 
     f().catch<typeof res>(e => {
       if (e instanceof APIError)
@@ -99,11 +125,12 @@ export default function App() {
         return {type: "unauthorized", err: e.message};
       else return {type:"error", err: `${e}`};
     }).then(x => {
-      if (askI.current==old) setRes(x ?? ores);
-    })
+      console.log("updating to ",x, askI.current, old);
+      if (askI.current==old) setRes(x);
+    });
   };
 
-  const handleSubmit = (values: typeof form.values)=>wrapPromise(async ()=>{
+  const handleSubmit = (values: typeof form.values)=>wrapPromise("completion", async ()=>{
     const match = values.probName.match(/^(\d+)(\w+?)$/)!;
     const res = await resApi(getHint)(values.type!, match[1], match[2], values.question);
     if (res.type!="success") {
@@ -115,12 +142,11 @@ export default function App() {
     return { ...res, type: "ok", hint: values.type! };
   });
 
-  useEffect(() => wrapPromise(async ()=>{
+  useEffect(() => wrapPromise("login", async ()=>{
     const req = localStorage.getItem("req");
     let vs:any|null=null;
     if (req!=undefined) {
       vs = JSON.parse(req);
-      console.log(vs);
       form.setValues(vs);
     }
 
@@ -128,8 +154,8 @@ export default function App() {
     const code=params.get("code"), state=params.get("state");
     //so i should probably make this only on post but nextjs makes everything hard D:
     if (code!=undefined && state!=undefined) {
+      window.history.replaceState(null, "", window.location.pathname);
       setLoggedIn(await resApi(exchangeCode)(code, state));
-      window.history.replaceState(null, "", "?");
     } else {
       setLoggedIn(await resApi(isLoggedIn)());
     }
@@ -147,7 +173,10 @@ export default function App() {
       <Modal centered opened={authErr!=null}
         onClose={()=>setAuthErr(null)}
         title={<Title order={2} >Unauthorized</Title>} withCloseButton >
-        <Text>{authErr?.type=="login" ? "You aren't logged in! You must be in the Discord to continue." : "You aren't in the Discord -- you can try logging in again."}</Text>
+        {authErr?.type!="notInDiscord" ? "You aren't logged in! You must be in the Discord to continue."
+          : <>
+            You aren't in the Discord! I've restricted this application to users in the <Anchor href="https://purduecpu.com" target="_blank" >Competitive Programmers Union</Anchor> to save my OpenAI credits. You can <b>join <Anchor href="https://discord.gg/A6twkCcW83" target="_blank" >here</Anchor></b> and refresh, or <b>login again</b>.
+          </>}
 
         <Center mt="lg" >
           <Button onClick={() => {
@@ -159,11 +188,17 @@ export default function App() {
       </Modal>
 
 			<Stack align="center" my="lg" >
-        <Image component={NextImage} src={what} alt="icon" w={120} />
+        <Image component={NextImage} src={what} alt="icon" w={120} style={{filter: "drop-shadow(0 0 25px black)"}} />
         <Title order={1} >Need a hint?</Title>
       </Stack>
       <Text my="md" >
         We feed data from your Codeforces' problem metadata, statement and editorial into a LLM.
+        {loggedIn && <Anchor ml={5} onClick={()=>wrapPromise("logout", ()=>resApi(logout)().then(x=>{
+          setLoggedIn(null);
+          return null;
+        }))} >
+          Logout from <b>@{loggedIn}</b>.
+        </Anchor>}
       </Text>
       <form
         onSubmit={form.onSubmit(handleSubmit)}
@@ -209,15 +244,6 @@ export default function App() {
       <Space h="lg" />
 
       {x}
-
-      <Space h="lg" />
-
-      {loggedIn && <Anchor onClick={()=>wrapPromise(()=>resApi(logout)().then(x=>{
-        setLoggedIn(null);
-        return null;
-      }))} >
-        <Group gap="sm" >Logout from <Text fw={600} >@{loggedIn}</Text></Group>
-      </Anchor>}
     </Container>
   );
 }

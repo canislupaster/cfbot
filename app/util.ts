@@ -15,7 +15,11 @@ export class Unauthorized extends Error {
 }
 
 export const ROOT_URL = process.env["ROOT_URL"]!;
-export type AuthResult = {type: "success"}|{type: "login", redirect: string}|{type: "notInDiscord", redirect: string};
+export type AuthFailure = {type: "login", redirect: string}|{type: "notInDiscord", redirect: string};
+
+export type HintResult = {result: string, usage: {tokens: number, cents: number}|null, code: {
+	source: string, language: string
+}|null};
 
 //to get around nextjs exception sanitization, we only allow apierror and unauthorized through by wrapping everything up...
 //i never want to see this again!
@@ -29,6 +33,7 @@ export function apiRes<T extends any[],R>(f: (...args: T)=>Promise<R>): (...args
 		try {
 			return {status: "ok", result: await f(...args)};
 		} catch (e) {
+			console.error(e);
       if (e instanceof APIError) return {status:"apiError", type: e.type, msg: e.message};
       else if (e instanceof Unauthorized) return {status:"unauthorized", msg: e.message};
       else return {status: "apiError", type: "other", msg: "An unknown error occurred"};
