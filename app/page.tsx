@@ -11,6 +11,13 @@ import what from "./what.svg"
 import NextImage from "next/image"
 import { CodeHighlight } from "@mantine/code-highlight";
 import React from "react";
+import { InlineMath, BlockMath } from 'react-katex';
+
+const replacements = [
+  {delim: "`", replace: (x: string) => <Code fz="lg" fw={900} >{x}</Code>},
+  {delim: "$$", replace: (x: string) => <Box w="100%" ><BlockMath math={x} /></Box>},
+  {delim: "$", replace: (x: string) => <InlineMath math={x} />}
+];
 
 export default function App() {
   const typeNames: Record<HintType, string> = {
@@ -33,7 +40,7 @@ export default function App() {
     | {type: "unauthorized", err: string}
     | {type: "apiError", err: APIError}
     | ({type: "ok", hint: HintType}&HintResult)
-    | {type: "loading", kind: Task}>();
+    | {type: "loading", kind: Task}>(null);
   
   const [authErr, setAuthErr] = useState<Exclude<AuthFailure,{type: "success"}>|null>(null);
   const [loggedIn, setLoggedIn] = useState<string|null>(null);
@@ -72,18 +79,55 @@ export default function App() {
       break;
 
     case "ok":
+      const out: ({type: "string", s: string}|{type: "node", x: React.ReactNode})[]=[
+        {type: "string", s: res.result}
+      ];
+      for (const rep of replacements) {
+        for (let i=0; i<out.length; i++) {
+          const x=out[i];
+          if (x.type=="string") {
+            let lp=false;
+            let arr: typeof out=[];
+            let j=0;
+            while (x.s.length>0) {
+              j = x.s.indexOf(rep.delim, j);
+              if (j==-1) break;
+              if (j>0 && x.s[j-1]=='\\') {
+                console.log(x.s, x.s.slice(j-1), j)
+                x.s = `${x.s.slice(0,j-1)}${x.s.slice(j)}`;
+                console.log(x.s.slice(j));
+                continue;
+              }
+
+              console.log(`found ${x.s.slice(0,j)} ${lp}`);
+
+              if (!lp) {if (j>0) arr.push({type: "string", s: x.s.slice(0,j)});}
+              else arr.push({type: "node", x: rep.replace(x.s.slice(0,j))});
+
+              x.s=x.s.slice(j+rep.delim.length);
+              j=0;
+              lp=!lp;
+            }
+
+            out.splice(i,x.s.length==0 ? 1 : 0,...arr);
+            i+=arr.length-(x.s.length==0 ? 1 : 0);
+          }
+        }
+      }
+
       x=<Alert variant="outline" title={<Title order={4} >{typeNames[res.hint]} Hint</Title>} styles={{
         body: {maxWidth: "100%"}
       }} >
-        <Text size="lg" ff="monospace" mx={10} >
-          <IconMessageChatbotFilled style={{verticalAlign: "sub", marginRight: "0.5rem"}} />
+        
+        <Group gap={1} align="baseline" fz="lg" >
+          <IconMessageChatbotFilled style={{alignSelf: "flex-start"}} />
 
-          {res.result.split(/(?<!\\)`/g).map((x,i)=>{
-            x=x.replaceAll("\\`", "`");
-            if (i%2==1) return <Code key={i} fz="lg" fw={900} >{x}</Code>;
-            else return <React.Fragment key={i} >{x}</React.Fragment>
-          })}
-        </Text>
+          {out.map((x,i) => 
+            x.type=="string"
+              ? <Text size="lg" ff="monospace" mx={10} key={i} >{x.s}</Text>
+              : <React.Fragment key={i} >{x.x}</React.Fragment>
+          )}
+        </Group>
 
         {res.code!=null && 
           <CodeHighlight code={res.code.source} mt="md" language={res.code.language} />

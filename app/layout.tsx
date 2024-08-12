@@ -1,5 +1,6 @@
 import '@mantine/core/styles.css';
 import '@mantine/code-highlight/styles.css';
+import 'katex/dist/katex.min.css';
 
 import { ColorSchemeScript, createTheme, MantineProvider } from '@mantine/core';
 

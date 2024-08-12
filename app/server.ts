@@ -306,7 +306,7 @@ export const getHint = apiRes(
 						},
 						[key]: {
 							type: "string",
-							description: `Enter your ${hintStr} hint here. Keep it plain, with the exception of ${"`"}inline code blocks${"`"}.`
+							description: `Enter your ${hintStr} hint here. You may use ${"`"}inline code blocks${"`"}, $inline math$ and $$block math$$ (rendered with KaTeX).`
 						},
 						code: noCode ? undefined : {
 							type: ["object","null"],

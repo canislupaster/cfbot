@@ -21,6 +21,7 @@
     "openai": "^4.55.1",
     "react": "^18",
     "react-dom": "^18",
+    "react-katex": "^3.0.1",
     "sharp": "^0.33.4",
     "tiktoken": "^1.0.15",
     "undici": "^6.19.5"
@@ -29,6 +30,7 @@
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "@types/react-katex": "^3.0.4",
     "typescript": "5.5.4"
   }
 }
