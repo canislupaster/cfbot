@@ -101,8 +101,11 @@ export default function App() {
 
               console.log(`found ${x.s.slice(0,j)} ${lp}`);
 
-              if (!lp) {if (j>0) arr.push({type: "string", s: x.s.slice(0,j)});}
-              else arr.push({type: "node", x: rep.replace(x.s.slice(0,j))});
+              if (!lp) {
+                if (j>0) arr.push({type: "string", s: x.s.slice(0,j)});
+              } else {
+                arr.push({type: "node", x: rep.replace(x.s.slice(0,j))});
+              }
 
               x.s=x.s.slice(j+rep.delim.length);
               j=0;
@@ -119,15 +122,15 @@ export default function App() {
         body: {maxWidth: "100%"}
       }} >
         
-        <Group gap={1} align="baseline" fz="lg" >
-          <IconMessageChatbotFilled style={{alignSelf: "flex-start"}} />
+        <Box fz="lg" mx={10} >
+          <IconMessageChatbotFilled style={{verticalAlign: "sub", marginRight: "0.5rem"}} />
 
           {out.map((x,i) => 
             x.type=="string"
-              ? <Text size="lg" ff="monospace" mx={10} key={i} >{x.s}</Text>
+              ? <Text size="lg" key={i} display="inline" >{x.s}</Text>
               : <React.Fragment key={i} >{x.x}</React.Fragment>
           )}
-        </Group>
+        </Box>
 
         {res.code!=null && 
           <CodeHighlight code={res.code.source} mt="md" language={res.code.language} />
