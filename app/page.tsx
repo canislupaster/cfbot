@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getHint, getProblemNames } from "./server";
-import { Container,Text,TextInput,Group,Autocomplete,Select, Button, Stack, Loader, Title, Box, ComboboxItem, Alert, Space, Center, Textarea, Modal, Anchor, Image, Code } from "@mantine/core";
+import { Container,Text,TextInput,Group,Autocomplete,Select, Button, Stack, Loader, Title, Box, ComboboxItem, Alert, Space, Center, Textarea, Modal, Anchor, Image, Code, Divider } from "@mantine/core";
 import { useForm } from '@mantine/form';
 import { APIError, APIErrorType, AuthFailure, HintResult, HintType, resApi, Unauthorized } from "./util";
 import { IconBrandDiscordFilled, IconExclamationCircleFilled, IconMessageChatbotFilled, IconRobot } from "@tabler/icons-react";
@@ -12,6 +12,7 @@ import NextImage from "next/image"
 import { CodeHighlight } from "@mantine/code-highlight";
 import React from "react";
 import { InlineMath, BlockMath } from 'react-katex';
+import Link from "next/link";
 
 const replacements = [
   {delim: "`", replace: (x: string) => <Code fz="lg" fw={900} >{x}</Code>},
@@ -21,7 +22,8 @@ const replacements = [
 
 export default function App() {
   const typeNames: Record<HintType, string> = {
-    yesNo: "Yes/No", oneWord: "One Word", small: "Small", medium: "Medium", big: "Big"
+    yesNo: "Yes/No", oneWord: "One Word", complexity: "Complexity",
+    small: "Small", medium: "Medium", big: "Big"
   };
 
   const apiErrTypeNames: Record<APIErrorType, string> = {
@@ -29,7 +31,8 @@ export default function App() {
     problemNotFound: "Problem not found",
     editorialNotFound: "Editorial not found",
     refusal: "The model refused to answer",
-    other: "Internal server error"
+    other: "Internal server error",
+    overusage: "You've used too much $$$!"
   };
 
   type Task = "login"|"completion"|"logout";
@@ -220,7 +223,8 @@ export default function App() {
       <Modal centered opened={authErr!=null}
         onClose={()=>setAuthErr(null)}
         title={<Title order={2} >Unauthorized</Title>} withCloseButton >
-        {authErr?.type!="notInDiscord" ? "You aren't logged in! You must be in the Discord to continue."
+        {authErr?.type!="notInDiscord"
+          ? "You aren't logged in! My credits are limited, and to prevent spam/overuse, I'll need you to sign in with Discord."
           : <>
             You aren't in the Discord! I've restricted this application to users in the <Anchor href="https://purduecpu.com" target="_blank" >Competitive Programmers Union</Anchor> to save my OpenAI credits. You can <b>join <Anchor href="https://discord.gg/A6twkCcW83" target="_blank" >here</Anchor></b> and refresh, or <b>login again</b>.
           </>}
@@ -291,6 +295,12 @@ export default function App() {
       <Space h="lg" />
 
       {x}
+
+      <Divider mt="xl" />
+
+      <Center>
+        <p>from the <Anchor target="_blank" href="https://purduecpu.com" >Purdue Competitive Programmers Union</Anchor></p>
+      </Center>
     </Container>
   );
 }

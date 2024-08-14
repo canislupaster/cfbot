@@ -4,7 +4,7 @@ import { cookies } from 'next/headers'
 import {default as knexConstructor} from "knex"
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { fetchDispatcher } from "./server";
-import { apiRes, AuthFailure, ROOT_URL, Unauthorized } from "./util";
+import { APIError, apiRes, AuthFailure, ROOT_URL, Unauthorized } from "./util";
 
 const knex = knexConstructor({
 	client: "better-sqlite3",
@@ -13,9 +13,11 @@ const knex = knexConstructor({
 });
 
 type DBSession = {id: string, key: Buffer, user: number|null, created: number};
-type DBUser = {id: number, discordId: string, discordUsername: string, cost: number};
+type DBUser = {id: number, discordId: string, costStart: number|null, discordUsername: string, cost: number};
 
 const SESSION_EXPIRE = 1000*3600*24*10; //milliseconds
+const CREDIT_LIMIT = 3;//cents
+const CREDIT_TIME = 24*3600*1000*3; //ms
 
 function hash(s: string): Buffer {
 	const h = createHash("sha256");
@@ -82,8 +84,10 @@ export async function auth(): Promise<AuthFailure|{type: "success", user: DBUser
 
 	const u = ses.user==null ? null : await getUser(ses.user);
 	if (ses.user==null || u==null) return {type: "login", redirect: redir.href};
-	if (!(await inDiscord(u.discordId)))
-		return {type: "notInDiscord", redirect: redir.href};
+	if (u.costStart!=null && u.costStart>=Date.now()-CREDIT_TIME && u.cost>CREDIT_LIMIT)
+		throw new APIError("overusage", `Your usage will reset around (sorry too lazy to convert timezones :}) ${new Date(u.costStart+CREDIT_TIME).toDateString()}`);
+	// if (!(await inDiscord(u.discordId)))
+	// 	return {type: "notInDiscord", redirect: redir.href};
 
 	return {type: "success", user: u};
 }
@@ -144,5 +148,10 @@ export const logout = apiRes(async ()=>{
 });
 
 export async function addCost(u: DBUser, cost: number) {
-	await knex<DBUser>("user").update({cost: u.cost+cost}).where({id: u.id});
+	await knex<DBUser>("user")
+		.update({
+			cost: u.cost+cost,
+			costStart: (u.costStart==null || u.costStart<Date.now()-CREDIT_TIME) ? Date.now() : u.costStart
+		})
+		.where({id: u.id});
 }

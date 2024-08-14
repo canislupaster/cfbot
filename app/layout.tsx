@@ -12,8 +12,8 @@ const mont = Montserrat({ subsets: ["latin"] });
 const redhat = Red_Hat_Mono({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "CFBot",
-  description: "sneak a hint from CF editorials with mr LLM!"
+  title: "CFHint",
+  description: "sneak a hint from CF editorials"
 };
 
 const theme = createTheme({

@@ -240,6 +240,10 @@ export const getHint = apiRes(
 			break;
 		case "oneWord": hintStr="one word"; break;
 		case "yesNo": hintStr="yes or no"; break;
+		case "complexity":
+			hintStr="runtime complexity";
+			hintDesc="Extract the runtime (or, if the user requests, memory) complexity from the editorial. Do not give anything else away. Format as display math.";
+			break;
 		default: throw new APIError("failed", `unknown hint type ${type}`);
 	}
 
@@ -279,7 +283,7 @@ export const getHint = apiRes(
 	if (hasPrompt) {
 		msgs.push({
 			role: "assistant",
-			content: "What is your question about the problem/solution?"
+			content: "What do you want to know about the solution?"
 		});
 
 		msgs.push({
@@ -302,11 +306,11 @@ export const getHint = apiRes(
 					properties: {
 						explanation: {
 							type: "string",
-							description: "Explain what you think you should reveal in your hint and verify the accuracy of your hint."
+							description: `Explain what you think you should reveal in your hint and verify the accuracy of your hint.${hasPrompt ? " Also, carefully confirm the relevance of your hint to the user's question." : ""}`
 						},
 						[key]: {
 							type: "string",
-							description: `Enter your ${hintStr} hint here. You may use ${"`"}inline code blocks${"`"}, $inline math$ and $$block math$$ (rendered with KaTeX).`
+							description: `Enter your ${hintStr} hint here. You may use ${"`"}inline code blocks${"`"}, $inline math$ and $$block math$$ (rendered with KaTeX). If you are uncertain or your hint is not directly reported in the editorial, make that clear here.`
 						},
 						code: noCode ? undefined : {
 							type: ["object","null"],
@@ -335,6 +339,7 @@ export const getHint = apiRes(
 	if (msg?.content==null) throw new APIError("failed", "no content");
 
 	let out = JSON.parse(msg.content);
+	console.log(out.explanation);
 	if (typeof out[key] !== "string") throw new APIError("failed", "invalid json from model response");
 
 	out[key]=out[key].trim();

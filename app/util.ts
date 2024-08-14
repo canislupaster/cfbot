@@ -1,6 +1,6 @@
-export type HintType = "yesNo"|"oneWord"|"small"|"medium"|"big";
+export type HintType = "yesNo"|"oneWord"|"small"|"medium"|"big"|"complexity";
 
-export type APIErrorType = "failed"|"problemNotFound"|"editorialNotFound"|"refusal"|"other";
+export type APIErrorType = "failed"|"problemNotFound"|"editorialNotFound"|"refusal"|"other"|"overusage";
 export class APIError extends Error {
 	type: APIErrorType;
 
