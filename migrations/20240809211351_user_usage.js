@@ -4,9 +4,7 @@
  */
 exports.up = function(knex) {
   return knex.schema.alterTable("user", tb=>{
-		//-_-
-		if (!knex.schema.hasColumn("user", "cost"))
-			tb.double("cost").defaultTo(0).notNullable();
+		tb.double("cost").defaultTo(0).notNullable();
 	});
 };
 
