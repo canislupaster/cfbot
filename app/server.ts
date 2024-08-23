@@ -135,7 +135,7 @@ async function getEditorial(contest: string, index: string) {
 			for (const link of prob(box).find("li a").toArray()) {
 				const title = link.attribs["title"]??"", txt=prob(link).text(), href=link.attribs["href"]??"";
 				const search = `${title}\n${txt}`.toLowerCase();
-				if (["editorial", "tutorial"].some(x=>search.includes(x))
+				if ((["editorial", "tutorial"].some(x=>search.includes(x)) || title.trim()=="T")
 					&& href.match(/^(https:\/\/codeforces\.com)?\/blog\/entry\/\d+$/)!=null) {
 
 					out=link.attribs["href"]??null;
