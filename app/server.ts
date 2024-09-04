@@ -73,6 +73,7 @@ export async function fetchDispatcher<T>(noproxy: boolean, transform: (r: Respon
 				...args[1],
 				//@ts-ignore
 				dispatcher: d,
+				next: {revalidate: 3600},
 				headers: hdrs,
 				signal: AbortSignal.timeout(timeout)
 			});
