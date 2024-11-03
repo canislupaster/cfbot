@@ -484,15 +484,18 @@ export const getHint = apiRes(
 	}
 });
 
+export async function getLoginInfo(user: DBUser) {
+	const limits = await getLimits(user);
+	return {
+		discordUsername: user.discordUsername,
+		cents: user.cost, maxCent: limits.maxCents,
+		resetTime: user.costStart && user.costStart+CREDIT_TIME>Date.now() ? user.costStart+CREDIT_TIME : null,
+		model: limits.model.replaceAll("gpt", "GPT")
+	} satisfies LoginInfo;
+}
+
 export const loginInfo = apiRes(async ()=>{
 	const authed = await auth();
 	if (authed.type!="success") return null;
-		
-	const limits = await getLimits(authed.user);
-	return {
-		discordUsername: authed.user.discordUsername,
-		cents: authed.user.cost, maxCent: limits.maxCents,
-		resetTime: authed.user.costStart && authed.user.costStart+CREDIT_TIME>Date.now() ? authed.user.costStart+CREDIT_TIME : null,
-		model: limits.model.replaceAll("gpt", "GPT")
-	} satisfies LoginInfo;
+	return getLoginInfo(authed.user);
 });

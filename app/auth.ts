@@ -3,7 +3,7 @@
 import { cookies } from 'next/headers'
 import {default as knexConstructor} from "knex"
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { fetchDispatcher } from "./server";
+import { fetchDispatcher, getLoginInfo } from "./server";
 import { apiRes, AuthFailure, ROOT_URL, Unauthorized } from "./util";
 
 const knex = knexConstructor({
@@ -117,19 +117,19 @@ export const exchangeCode = apiRes(async (code: string, state: string) => {
 	if (typeof user.id !== "string" || typeof user.username !== "string")
 		throw new Unauthorized("Failed to retrieve user info.");
 
-	const userId = (await knex<DBUser>("user").insert({
+	const dbUser = (await knex<DBUser>("user").insert({
 		discordId: user.id,
 		discordUsername: user.username
 	})
-		.onConflict("discordId").merge().returning("id"))[0];
-	if (userId==null) throw new Unauthorized("Couldn't create user");
+		.onConflict("discordId").merge().returning("*"))[0];
+	if (dbUser==null) throw new Unauthorized("Couldn't create user");
 
 	knex.transaction(async trx => {
-		await trx<DBSession>("session").where({user: userId.id}).andWhereNot({id: ses.id}).delete();
-		await trx<DBSession>("session").where({id: ses.id}).update({user: userId.id});
+		await trx<DBSession>("session").where({user: dbUser.id}).andWhereNot({id: ses.id}).delete();
+		await trx<DBSession>("session").where({id: ses.id}).update({user: dbUser.id});
 	});
 
-	return user.username;
+	return getLoginInfo(dbUser);
 });
 
 export const logout = apiRes(async ()=>{
