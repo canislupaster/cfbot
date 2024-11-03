@@ -17,7 +17,7 @@
     "better-sqlite3": "^11.1.2",
     "cheerio": "^1.0.0-rc.12",
     "knex": "^3.1.0",
-    "next": "14.2.5",
+    "next": "^14.2.16",
     "openai": "^4.55.1",
     "react": "^18",
     "react-dom": "^18",
@@ -27,7 +27,7 @@
     "undici": "^6.19.5"
   },
   "devDependencies": {
-    "@types/node": "^20",
+    "@types/node": "^22.8.7",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "@types/react-katex": "^3.0.4",

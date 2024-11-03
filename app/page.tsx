@@ -1,12 +1,12 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react";
-import { getHint, getProblemNames } from "./server";
-import { Container,Text,TextInput,Group,Autocomplete,Select, Button, Stack, Loader, Title, Box, ComboboxItem, Alert, Space, Center, Textarea, Modal, Anchor, Image, Code, Divider } from "@mantine/core";
+import { getHint, getProblemNames, loginInfo } from "./server";
+import { Container,Text,Group,Autocomplete,Select, Button, Stack, Loader, Title, Box, ComboboxItem, Alert, Space, Center, Textarea, Modal, Anchor, Image, Code, Divider } from "@mantine/core";
 import { useForm } from '@mantine/form';
-import { APIError, APIErrorType, AuthFailure, HintResult, HintType, resApi, Unauthorized } from "./util";
+import { APIError, APIErrorType, AuthFailure, HintResult, HintType, LoginInfo, resApi, Unauthorized } from "./util";
 import { IconBrandDiscordFilled, IconExclamationCircleFilled, IconMessageChatbotFilled, IconRobot } from "@tabler/icons-react";
-import { exchangeCode, isLoggedIn, logout } from "./auth";
+import { exchangeCode, logout } from "./auth";
 import what from "./what.svg"
 import NextImage from "next/image"
 import { CodeHighlight } from "@mantine/code-highlight";
@@ -46,7 +46,7 @@ export default function App() {
     | {type: "loading", kind: Task}>(null);
   
   const [authErr, setAuthErr] = useState<Exclude<AuthFailure,{type: "success"}>|null>(null);
-  const [loggedIn, setLoggedIn] = useState<string|null>(null);
+  const [loggedIn, setLoggedIn] = useState<LoginInfo|null>(null);
 
   const askI = useRef(0);
 
@@ -207,7 +207,7 @@ export default function App() {
       window.history.replaceState(null, "", window.location.pathname);
       setLoggedIn(await resApi(exchangeCode)(code, state));
     } else {
-      setLoggedIn(await resApi(isLoggedIn)());
+      setLoggedIn(await resApi(loginInfo)());
     }
 
     if (vs!=null) {
@@ -248,7 +248,7 @@ export default function App() {
           setLoggedIn(null);
           return null;
         }))} >
-          Logout from <b>@{loggedIn}</b>.
+          Logout from <b>@{loggedIn.discordUsername}</b>.
         </Anchor>}
       </Text>
       <form
@@ -286,7 +286,7 @@ export default function App() {
 
         <Center>
           <Button type="submit" mt="md" disabled={res?.type=="loading"} leftSection={<IconMessageChatbotFilled/>} size="xl" ff="heading" >
-            Ask GPT-4o-Mini
+            Ask {loggedIn?.model ?? "GPT-4o-mini"}
           </Button>
         </Center>
 

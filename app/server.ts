@@ -1,14 +1,13 @@
 "use server"
 
-import { Cheerio } from "cheerio";
 import * as cheerio from "cheerio";
 import OpenAI from "openai";
 import { ProxyAgent } from "undici";
-import { APIError, apiRes, AuthFailure, HintResult, HintType } from "./util";
+import { APIError, apiRes, AuthFailure, HintResult, HintType, LoginInfo } from "./util";
 
 import prox from "../proxies.json";
-import { encoding_for_model } from "tiktoken";
-import { addCost, auth } from "./auth";
+import { encoding_for_model, Tiktoken } from "tiktoken";
+import { updateCost, auth, DBUser, inDiscord } from "./auth";
 
 const dispatchers: (ProxyAgent|undefined)[] = [];
 const waiters: (()=>void)[] = [];
@@ -23,12 +22,20 @@ function shuffle<T>(arr: T[]) {
 	}
 }
 
-console.log(`initializing ${prox.length} proxies`);
+let proxArr: string[];
+if ("proxyFetchUrl" in prox) {
+	console.log("fetching proxies...");
+	proxArr = (await (await fetch(prox.proxyFetchUrl)).text()).trim().split("\n");
+} else {
+	proxArr = prox;
+}
 
-for (const p of (prox as string[])) {
+console.log(`adding ${proxArr.length} proxies`);
+
+for (const p of proxArr) {
 	const parts = p.split(":");
 	if (parts.length!=2 && parts.length!=4)
-		throw `expected 2 (host,port) or 4 parts (host,port,user,pass) for proxy ${p}`;
+		throw new Error(`expected 2 (host,port) or 4 parts (host,port,user,pass) for proxy ${p}`);
 	dispatchers.push(new ProxyAgent({
 		uri: `http://${parts[0]}:${parts[1]}`,
 		token: parts.length==2 ? undefined : `Basic ${Buffer.from(`${parts[2]}:${parts[3]}`).toString('base64')}`
@@ -41,7 +48,12 @@ let mainReady=true;
 const dispatcherWait = 500, dispatcherErrorWait = 30_000, timeout=10_000;
 const waiterLimit = 25;
 
-export async function fetchDispatcher<T>(noproxy: boolean, transform: (r: Response) => Promise<T>, ...args: Parameters<typeof fetch>): Promise<T> {
+export type FetchOpts = {
+	noproxy?: boolean,
+	nocache?: boolean
+};
+
+export async function fetchDispatcher<T>({noproxy, nocache}: FetchOpts, transform: (r: Response) => Promise<T>, ...args: Parameters<typeof fetch>): Promise<T> {
 	let err: any;
 	for (let retryI=0; retryI<5; retryI++) {
 		let d: ProxyAgent|undefined=undefined;
@@ -73,7 +85,8 @@ export async function fetchDispatcher<T>(noproxy: boolean, transform: (r: Respon
 				...args[1],
 				//@ts-ignore
 				dispatcher: d,
-				next: {revalidate: 3600},
+				cache: nocache ? "no-cache" : undefined,
+				next: nocache ? undefined : {revalidate: 3600},
 				headers: hdrs,
 				signal: AbortSignal.timeout(timeout)
 			});
@@ -112,7 +125,7 @@ async function getHTML(url: string|URL, qparams: Record<string,string>={}) {
 	const u = new URL(url);
 	for (const [k,v] of Object.entries(qparams))
 		u.searchParams.append(k,v);
-	return await fetchDispatcher(false,(resp)=>{
+	return await fetchDispatcher({}, (resp)=>{
 		if (resp.status!=200) throw resp.statusText;
 		return resp.text().then(x=>cheerio.load(x));
 	}, u);
@@ -190,7 +203,7 @@ type ProblemSet = {
 let problemSet: ProblemSet|null=null;
 
 async function getProblemSet() {
-	if (problemSet==null) problemSet=await fetchDispatcher(false, async (r)=>{
+	if (problemSet==null) problemSet=await fetchDispatcher({nocache: true}, async (r)=>{
 		const j = await r.json();
 		if (j.status != "OK") throw new APIError("failed", `CF API Error: ${j.comment}`);
 		return j.result;
@@ -206,19 +219,102 @@ export const getProblemNames = apiRes(async ()=>{
 	return (await getProblemSet()).problems.map(x=>`${x.contestId}${x.index}`);
 });
 
-const MAX_OUT_TOKEN = 512;
-const MAX_IN_TOKEN = 8192;
-const MODEL = "gpt-4o-mini";
-const TOKEN_INPUT_CENTS = 15/1e6, TOKEN_OUTPUT_CENTS=60/1e6;
+type Model = "gpt-4o-mini"|"o1-mini";
+type UserLimits = {
+	model: Model,
+	maxCents: number
+};
 
-const enc = encoding_for_model("gpt-4o");
+type ModelInfo = {
+	maxOutToken: number,
+	maxInToken: number,
+	inputCents: number,
+	outputCents: number,
+	encoding: Tiktoken
+};
 
-export const getHint = apiRes(
-	async (type: HintType, contest: string, index: string, prompt: string):
-		Promise<AuthFailure|({type: "success"}&HintResult)> => {
+const CREDIT_TIME = 24*3600*1000*3; //3 days, in ms
 
-	const authRes = await auth();
-	if (authRes.type!="success") return authRes;
+const modelInfo: Record<Model, ModelInfo> = {
+	"gpt-4o-mini": {
+		maxOutToken: 512,
+		maxInToken: 8192,
+		inputCents: 15/1e6,
+		outputCents: 60/1e6,
+		encoding: encoding_for_model("gpt-4o-mini"),
+	},
+	"o1-mini": {
+		maxOutToken: 1024,
+		maxInToken: 8192,
+		inputCents: 300/1e6,
+		outputCents: 12*100/1e6,
+		encoding: encoding_for_model("o1-mini")
+	}
+} as const;
+
+const userLimits = {
+	poor: {
+		model: "gpt-4o-mini",
+		maxCents: 3
+	} satisfies UserLimits,
+	rich: {
+		model: "o1-mini",
+		maxCents: 10
+	} satisfies UserLimits,
+} as const;
+
+const userLock = new Set<number>();
+
+async function getLimits(user: DBUser) {
+	return await inDiscord(user.discordId) ? userLimits.rich : userLimits.poor;
+}
+
+type Usage = {
+	tokens: number, cents: number
+};
+
+async function runCompletion(user: DBUser, outUsage: Usage, model: Model, msgs: OpenAI.ChatCompletionMessageParam[], schema?: OpenAI.ResponseFormatJSONSchema["json_schema"]) {
+	const info = modelInfo[model];
+
+	const inputTokens = info.encoding.encode_ordinary(msgs.map(x=>x.content??"").join("\n")).length;
+	if (inputTokens>info.maxInToken)
+		throw new APIError("failed", `Exceeded ${info.maxInToken} input tokens when reprocessing model output with gpt-4o-mini`);
+
+	const completion = await openai.chat.completions.create({
+		max_completion_tokens: info.maxOutToken,
+		messages: msgs,
+		model: model,
+		response_format: schema ? {
+			type: "json_schema",
+			json_schema: schema
+		} : { type: "text" }
+	});
+
+	const usage = completion.usage;
+	const cost = usage==null ? 0 : info.inputCents*usage.prompt_tokens + info.outputCents*usage.completion_tokens;
+
+	if (cost>0) {
+		const expired = user.costStart==null || user.costStart<Date.now()-CREDIT_TIME;
+		const start = user.costStart==null || expired ? Date.now() : user.costStart;
+		await updateCost(user, (expired ? 0 : user.cost)+cost, start);
+	}
+
+	if (usage) {
+		outUsage.tokens+=usage.total_tokens;
+		outUsage.cents+=cost;
+	}
+
+	const msg = completion?.choices?.[0]?.message;
+	if (msg?.refusal!=null) throw new APIError("refusal", msg.refusal);
+	if (msg?.content==null) throw new APIError("failed", "no content");
+
+	return msg.content;
+}
+
+async function complete(type: HintType, contest: string, index: string, prompt: string, user: DBUser) {
+	const limits = await getLimits(user);
+	if (user.costStart!=null && user.costStart>=Date.now()-CREDIT_TIME && user.cost>limits.maxCents)
+		throw new APIError("overusage", `Your usage will reset around (sorry too lazy to convert timezones :}) ${new Date(user.costStart+CREDIT_TIME).toDateString()}`);
 
 	const problemSetSearch = new Map((await getProblemSet()).problems.map(
 		x=>[`${x.contestId}\n${x.index}`.toLowerCase(),x]));
@@ -250,14 +346,13 @@ export const getHint = apiRes(
 
 	const key = `${type}Hint`;
 
-	const system = `You will provide a **${hintStr}** hint to a Codeforces problem given the content of the editorial (including hints, solutions, and code).${hintDesc==null ? "" : ` ${hintDesc}`} The problem is ${prob.contestId}${prob.index} - ${prob.name}.${prob.tags.length>0 ? ` It is tagged ${
+	const system = `Please provide a **${hintStr}** hint to a Codeforces problem given the content of the editorial (including hints, solutions, and code).${hintDesc==null ? "" : ` ${hintDesc}`} The problem is ${prob.contestId}${prob.index} - ${prob.name}.${prob.tags.length>0 ? ` It is tagged ${
 		prob.tags.join(", ")}.`:""
 	}${prob.rating!=null ? ` It is rated ${prob.rating}.` : ""}`;
 
-	const inputTokens=enc.encode_ordinary(`${prompt}\n${edit}`).length;
-	if (inputTokens>MAX_IN_TOKEN)
-		throw new APIError("failed", `Exceeded ${MAX_IN_TOKEN} input tokens`);
-	const msgs: OpenAI.ChatCompletionMessageParam[] = [{ role: "system", content: system }];
+	const msgs: OpenAI.ChatCompletionMessageParam[] = [
+		{ role: limits.model=="o1-mini" ? "user" : "system", content: system }
+	];
 	
 	if (edit.statement!=null) {
 		msgs.push({
@@ -294,52 +389,60 @@ export const getHint = apiRes(
 	}
 
 	const noCode = ["yesNo","small","oneWord"].includes(type);
-	const completion = await openai.chat.completions.create({
-		max_tokens: MAX_OUT_TOKEN,
-		messages: msgs,
-		model: MODEL,
-		response_format: {
-			type: "json_schema",
-			json_schema: {
-				name: "hint_reasoning",
-				schema: {
-					type: "object",
+	const schema = {
+		name: "hint_reasoning",
+		schema: {
+			type: "object",
+			properties: {
+				explanation: {
+					type: "string",
+					description: `Explain what you think you should reveal in your hint and verify the accuracy of your hint.${hasPrompt ? " Also, carefully confirm the relevance of your hint to the user's question." : ""}`
+				},
+				[key]: {
+					type: "string",
+					description: `Enter your ${hintStr} hint here. You may use ${"`"}inline code blocks${"`"}, $inline math$ and $$block math$$ (rendered with KaTeX). If you are uncertain or your hint is not directly reported in the editorial, make that clear here.`
+				},
+				code: noCode ? undefined : {
+					type: ["object","null"],
 					properties: {
-						explanation: {
+						source: {type: "string"},
+						language: {
 							type: "string",
-							description: `Explain what you think you should reveal in your hint and verify the accuracy of your hint.${hasPrompt ? " Also, carefully confirm the relevance of your hint to the user's question." : ""}`
-						},
-						[key]: {
-							type: "string",
-							description: `Enter your ${hintStr} hint here. You may use ${"`"}inline code blocks${"`"}, $inline math$ and $$block math$$ (rendered with KaTeX). If you are uncertain or your hint is not directly reported in the editorial, make that clear here.`
-						},
-						code: noCode ? undefined : {
-							type: ["object","null"],
-							properties: {
-								source: {type: "string"},
-								language: {
-									type: "string",
-									description: "Short language identifier (e.g. cpp, python, js)"
-								}
-							},
-							required: ["source", "language"],
-							additionalProperties: false,
-							description: `You may include code with your ${hintStr} hint here at your discretion. Do not include code if it's not requested by the user.`
+							description: "Short language identifier (e.g. cpp, python, js)"
 						}
 					},
-					required: ["explanation",key,...(noCode ? [] : ["code"])],
-					additionalProperties: false
-				},
-				strict: true
-			}
-		}
-	});
+					required: ["source", "language"],
+					additionalProperties: false,
+					description: `You may include code with your ${hintStr} hint here at your discretion. Do not include code if it's not requested by the user.`
+				}
+			},
+			required: ["explanation",key,...(noCode ? [] : ["code"])],
+			additionalProperties: false
+		},
+		strict: true
+	} as const;
 
-	const msg = completion?.choices?.[0]?.message;
-	if (msg?.refusal!=null) throw new APIError("refusal", msg.refusal);
-	if (msg?.content==null) throw new APIError("failed", "no content");
+	const outUsage: Usage = {tokens: 0, cents: 0};
+	const content = await runCompletion(user, outUsage, limits.model, msgs,
+		limits.model=="gpt-4o-mini" ? schema : undefined);
 
-	let out = JSON.parse(msg.content);
+	let out;
+	if (limits.model=="gpt-4o-mini") {
+		out = JSON.parse(content);
+	} else {
+		console.log(content);
+		const system2 = `Please provide a ${hintStr} hint to a Codeforces problem.${hintDesc==null ? "" : ` ${hintDesc}`}`;
+
+		const msgs2: OpenAI.ChatCompletionMessageParam[] = [
+			{ role: "system", content: system2 },
+			{ role: "user", content: prompt },
+			{ role: "assistant", content: content },
+			{ role: "user", content: "Please reformat this hint in the given output format" }
+		];
+
+		out = JSON.parse(await runCompletion(user, outUsage, "gpt-4o-mini", msgs2, schema));
+	}
+
 	console.log(out.explanation);
 	if (typeof out[key] !== "string") throw new APIError("failed", "invalid json from model response");
 
@@ -353,17 +456,43 @@ export const getHint = apiRes(
 	if (type=="yesNo" && !["yes","no"].includes(words[0].toLowerCase()))
 		throw new APIError("refusal", "Model did not provide a yes/no response");
 	
-	const u = completion.usage;
-	const cost = u==null ? 0 : TOKEN_INPUT_CENTS*u.prompt_tokens + TOKEN_OUTPUT_CENTS*u.completion_tokens;
-	if (cost>0) addCost(authRes.user, cost);
-
 	return {
 		type: "success",
 		result: type=="yesNo" ? words[0].toLowerCase() : out[key],
 		code: noCode ? null : (out.code ?? null),
-		usage: u==null ? null : {
-			tokens: u.total_tokens,
-			cents: cost
-		}
-	};
+		usage: outUsage
+	} as const;
+}
+
+export const getHint = apiRes(
+	async (type: HintType, contest: string, index: string, prompt: string):
+		Promise<AuthFailure|({type: "success"}&HintResult)> => {
+
+	const authRes = await auth();
+	if (authRes.type!="success") return authRes;
+
+	const user = authRes.user;
+
+	if (userLock.has(user.id))
+		throw new APIError("failed", "A completion is already in progress.");
+
+	userLock.add(user.id);
+	try {
+		return await complete(type,contest,index,prompt,user);
+	} finally {
+		userLock.delete(user.id);
+	}
+});
+
+export const loginInfo = apiRes(async ()=>{
+	const authed = await auth();
+	if (authed.type!="success") return null;
+		
+	const limits = await getLimits(authed.user);
+	return {
+		discordUsername: authed.user.discordUsername,
+		cents: authed.user.cost, maxCent: limits.maxCents,
+		resetTime: authed.user.costStart && authed.user.costStart+CREDIT_TIME>Date.now() ? authed.user.costStart+CREDIT_TIME : null,
+		model: limits.model.replaceAll("gpt", "GPT")
+	} satisfies LoginInfo;
 });

@@ -17,9 +17,18 @@ export class Unauthorized extends Error {
 export const ROOT_URL = process.env["ROOT_URL"]!;
 export type AuthFailure = {type: "login", redirect: string}|{type: "notInDiscord", redirect: string};
 
-export type HintResult = {result: string, usage: {tokens: number, cents: number}|null, code: {
-	source: string, language: string
-}|null};
+export type HintResult = {
+	result: string,
+	usage: {tokens: number, cents: number},
+	code: {source: string, language: string}|null
+};
+
+export type LoginInfo = {
+	discordUsername: string,
+	cents: number, maxCent: number,
+	resetTime: number|null,
+	model: string
+};
 
 //to get around nextjs exception sanitization, we only allow apierror and unauthorized through by wrapping everything up...
 //i never want to see this again!

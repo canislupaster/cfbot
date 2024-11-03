@@ -2,9 +2,9 @@
 
 import { cookies } from 'next/headers'
 import {default as knexConstructor} from "knex"
-import { createHash, randomBytes, randomUUID } from "crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { fetchDispatcher } from "./server";
-import { APIError, apiRes, AuthFailure, ROOT_URL, Unauthorized } from "./util";
+import { apiRes, AuthFailure, ROOT_URL, Unauthorized } from "./util";
 
 const knex = knexConstructor({
 	client: "better-sqlite3",
@@ -13,11 +13,9 @@ const knex = knexConstructor({
 });
 
 type DBSession = {id: string, key: Buffer, user: number|null, created: number};
-type DBUser = {id: number, discordId: string, costStart: number|null, discordUsername: string, cost: number};
+export type DBUser = {id: number, discordId: string, costStart: number|null, discordUsername: string, cost: number};
 
 const SESSION_EXPIRE = 1000*3600*24*10; //milliseconds
-const CREDIT_LIMIT = 3;//cents
-const CREDIT_TIME = 24*3600*1000*3; //ms
 
 function hash(s: string): Buffer {
 	const h = createHash("sha256");
@@ -49,7 +47,7 @@ async function session() {
 	return {id, user: null};
 }
 
-async function getUser(userId: number) {
+export async function getUser(userId: number) {
 	return (await knex<DBUser>("user").select().where({id: userId}).first()) ?? null;
 }
 
@@ -58,8 +56,8 @@ const DISCORD_SECRET = process.env["DISCORD_SECRET"]!;
 const DISCORD_TOKEN = process.env["DISCORD_TOKEN"]!;
 const DISCORD_GUILD = process.env["DISCORD_GUILD"]!;
 
-async function inDiscord(discordId: string) {
-	return await fetchDispatcher(true, async r=>{
+export async function inDiscord(discordId: string) {
+	return await fetchDispatcher({noproxy: true}, async r=>{
 		if (r.status==404) return false;
 		else if (r.status==200) return true;
 		else throw r.statusText;
@@ -84,8 +82,6 @@ export async function auth(): Promise<AuthFailure|{type: "success", user: DBUser
 
 	const u = ses.user==null ? null : await getUser(ses.user);
 	if (ses.user==null || u==null) return {type: "login", redirect: redir.href};
-	if (u.costStart!=null && u.costStart>=Date.now()-CREDIT_TIME && u.cost>CREDIT_LIMIT)
-		throw new APIError("overusage", `Your usage will reset around (sorry too lazy to convert timezones :}) ${new Date(u.costStart+CREDIT_TIME).toDateString()}`);
 	// if (!(await inDiscord(u.discordId)))
 	// 	return {type: "notInDiscord", redirect: redir.href};
 
@@ -96,7 +92,7 @@ export const exchangeCode = apiRes(async (code: string, state: string) => {
 	const ses = await session();
 	if (state!==ses.id) throw new Unauthorized("Bad state");
 
-	const token = await fetchDispatcher(true, r=>r.json(), "https://discord.com/api/oauth2/token", {
+	const token = await fetchDispatcher({noproxy: true}, r=>r.json(), "https://discord.com/api/oauth2/token", {
 		method: "POST",
 		body: new URLSearchParams({
 			client_id: DISCORD_CLIENT,
@@ -114,7 +110,7 @@ export const exchangeCode = apiRes(async (code: string, state: string) => {
 	if (typeof token.access_token !== "string")
 		throw new Unauthorized("Failed to retrieve access token.");
 
-	const user = await fetchDispatcher(true, r=>r.json(), 'https://discord.com/api/users/@me', {
+	const user = await fetchDispatcher({noproxy: true}, r=>r.json(), 'https://discord.com/api/users/@me', {
 		headers: { authorization: `Bearer ${token.access_token}` },
 	});
 
@@ -136,22 +132,18 @@ export const exchangeCode = apiRes(async (code: string, state: string) => {
 	return user.username;
 });
 
-export const isLoggedIn = apiRes(async ()=>{
-	const ses = await session();
-	if (ses.user!=null) return (await getUser(ses.user))?.discordUsername ?? null;
-	return null;
-});
-
 export const logout = apiRes(async ()=>{
 	const ses = await session();
 	await knex<DBSession>("session").where({id: ses.id}).delete();
 });
 
-export async function addCost(u: DBUser, cost: number) {
+export async function updateCost(u: DBUser, cost: number, costStart: number) {
 	await knex<DBUser>("user")
 		.update({
-			cost: u.cost+cost,
-			costStart: (u.costStart==null || u.costStart<Date.now()-CREDIT_TIME) ? Date.now() : u.costStart
+			cost: cost,
+			costStart: costStart
 		})
 		.where({id: u.id});
+
+	u.cost=cost; u.costStart=costStart;
 }
